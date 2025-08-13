@@ -11,6 +11,8 @@ from deepchem.splits import ScaffoldSplitter
 from deepchem.data import NumpyDataset
 import seaborn as sns
 import matplotlib.pyplot as plt
+import sys; sys.path.insert(0, '/home/sjinich/disco/jcompoundmapper_pywrapper/src')
+from jCompoundMapper_pywrapper import JCompoundMapper
 
 
 
@@ -101,6 +103,54 @@ def get_tanimoto_similarity_triangle(df):
     return similarity_triangle_df
 
 
+def get_braunblanquet_ASP_triangle(df):
+    df_internal = df.copy()
+
+    if "fps" not in df_internal.columns:
+        df_internal = fingerprint_generator_ASP(df_internal)
+        df_internal = df_internal.reset_index(drop=True)
+
+    nfgrps = len(df_internal.loc[:,"fps"])
+    fgrps = df_internal.loc[:,"fps"]
+
+    similarities = np.empty((nfgrps, nfgrps))
+
+    for i in tqdm.trange(1, nfgrps):
+
+            similarity = [DataStructs.FingerprintSimilarity(fgrps[i], target_fgrps) for target_fgrps in fgrps[:i]]
+            similarities[i, :i] = similarity
+            similarities[:i, i] = similarity
+
+
+    # Calculating similarities of molecules
+    tri_lower_diag = np.tril(similarities, k=0)
+    tri_lower_diag[np.triu_indices(tri_lower_diag.shape[0])] = np.nan
+
+    similarity_triangle_df = pd.DataFrame(tri_lower_diag,index=df_internal["comp_id"],columns=df_internal["comp_id"])
+    
+    return similarity_triangle_df
+
+
+def fingerprint_generator_ASP(df): 
+    jcm = JCompoundMapper("ASP")
+    df["ROMol"] = df.loc[:,"smiles"].apply(Chem.MolFromSmiles)
+    fingerprints = jcm.calculate(df.loc[:,"ROMol"])
+    for idx in fingerprints.index:
+        df.loc[idx,"fps"] = list_to_sparse_int_vect(fingerprints.loc[idx,:])
+    return df
+
+def list_to_sparse_int_vect(fp_list):
+    from rdkit import DataStructs
+    from rdkit.DataStructs.cDataStructs import SparseBitVect
+    # Crear un SparseIntVect con el tamaño adecuado
+    sparse_vect = SparseBitVect(len(fp_list))
+
+    # Añadir los bits activados
+    for idx, value in enumerate(fp_list):
+        sparse_vect[idx] = int(value)
+
+    return sparse_vect
+
 
 def plot_similarity_histogram(similarity_triangle, target_name: str, export_folder="data_plots", width=6, height=4):
     flat_similarities = similarity_triangle.values.flatten()
@@ -124,8 +174,8 @@ def plot_similarity_histogram(similarity_triangle, target_name: str, export_fold
 
 def get_actives_inactives_similarity_flat(whole_df,similarity_triangle):
     
-    actives = whole_df.loc[whole_df["binary_bioactivity"]==1,"comp_id"]
-    inactives = whole_df.loc[whole_df["binary_bioactivity"]==0,"comp_id"]
+    actives = whole_df.loc[whole_df["bioactivity"]==1,"comp_id"]
+    inactives = whole_df.loc[whole_df["bioactivity"]==0,"comp_id"]
     
     similarity_actives = similarity_triangle.loc[actives,actives]
     similarity_inactives = similarity_triangle.loc[inactives,inactives]
@@ -133,8 +183,8 @@ def get_actives_inactives_similarity_flat(whole_df,similarity_triangle):
     similarity_actives_flat = similarity_actives.values.flatten()
     similarity_inactives_flat = similarity_inactives.values.flatten()
 
-    actives_df = pd.DataFrame(zip(similarity_actives_flat,["Active"]*len(similarity_actives_flat)),columns=["Tanimoto","Bioactivity"])
-    inactives_df = pd.DataFrame(zip(similarity_inactives_flat,["Inactive"]*len(similarity_inactives_flat)),columns=["Tanimoto","Bioactivity"])
+    actives_df = pd.DataFrame(zip(similarity_actives_flat,["Active"]*len(similarity_actives_flat)),columns=["Similarity","Bioactivity"])
+    inactives_df = pd.DataFrame(zip(similarity_inactives_flat,["Inactive"]*len(similarity_inactives_flat)),columns=["Similarity","Bioactivity"])
 
     return actives_df, inactives_df
 
